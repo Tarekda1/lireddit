@@ -25,7 +25,7 @@ export class PostResolver {
     const post = await em.create(Post, {
       title: title,
     });
-    em.persistAndFlush(post);
+    await em.persistAndFlush(post);
     return post;
   }
 
@@ -40,9 +40,34 @@ export class PostResolver {
     });
 
     if (!post) {
+      return null;
+    }
+    if (title !== "undefined") {
+      post.title = title;
+      await em.persistAndFlush(post);
     }
 
-    em.persistAndFlush(post);
     return post;
+  }
+
+  @Mutation(() => Boolean, { nullable: true })
+  async deletePost(
+    @Arg("id") id: number,
+    @Ctx() { em }: MyContext
+  ): Promise<boolean> {
+    const post = await em.findOne(Post, {
+      id: id,
+    });
+
+    if (!post) {
+      return false;
+    }
+    try {
+      await em.nativeDelete(Post, { id: id });
+    } catch (error) {
+      return false;
+    }
+
+    return true;
   }
 }

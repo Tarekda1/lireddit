@@ -16,6 +16,7 @@ exports.default = {
     dbName: "lireddit",
     user: "postgres",
     password: "123456",
+    port: 5433,
     type: "postgresql",
     debug: !constants_1.__prod__,
 };

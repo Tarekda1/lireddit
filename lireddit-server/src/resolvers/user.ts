@@ -150,7 +150,11 @@ export class UserResolver {
 			};
 		}
 
+		console.log(req.session);
+
 		req.session!.userId = user.id;
+
+		console.log(req.session);
 
 		return { user };
 	}

@@ -1,18 +1,14 @@
-import { Arg, Ctx, Field, InputType, Mutation, ObjectType, Query, Resolver } from 'type-graphql';
+import { validateRegister } from './../utils/validateRegister';
+import { COOKIE_NAME, FORGOT_PASSWORD_PREFIX } from './../constants';
+import { Arg, Ctx, Field, Mutation, ObjectType, Query, Resolver } from 'type-graphql';
 import argon2 from 'argon2';
 import { EntityManager } from '@mikro-orm/postgresql';
 
 import { MyContext } from 'src/types';
 import { User } from '../entities/User';
-//import { User } from "src/entities/User";
-
-@InputType()
-class UserNamePasswordInput {
-	@Field() username: string;
-
-	@Field() password: string;
-}
-
+import { UserNamePasswordInput } from './UserNamePasswordInput';
+import { sendEmail } from '../utils/sendEmail';
+import { v4 } from 'uuid';
 @ObjectType()
 class Error {
 	@Field() field: String;
@@ -30,6 +26,82 @@ class UserResponse {
 
 @Resolver()
 export class UserResolver {
+	@Mutation(() => UserResponse)
+	async changePassword(
+		@Arg('token') token: string,
+		@Arg('newPassword') newPassword: string,
+		@Ctx() { redis, em, req }: MyContext
+	): Promise<UserResponse> {
+		if (newPassword.length <= 2) {
+			return {
+				errors: [
+					{
+						field: 'newPassword',
+						message: 'password length must be greater than 2'
+					}
+				]
+			};
+		}
+		const tokenKey = FORGOT_PASSWORD_PREFIX + token;
+		const userId = await redis.get(tokenKey);
+
+		console.log(userId);
+
+		if (!userId) {
+			return {
+				errors: [
+					{
+						field: 'token',
+						message: 'invalid token'
+					}
+				]
+			};
+		}
+
+		const user = await em.findOne(User, { id: parseInt(userId) });
+		if (!user) {
+			return {
+				errors: [
+					{
+						field: 'newPassword',
+						message: 'user no longer exists'
+					}
+				]
+			};
+		}
+
+		//hash and update password to new password
+		const hashed = await argon2.hash(newPassword);
+		user.password = hashed;
+		await em.persistAndFlush(user);
+
+		//delete redis key to expire token
+		await redis.del(tokenKey);
+
+		//save user id to session again
+		req.session.userId = user.id;
+
+		return {
+			user
+		};
+	}
+
+	@Mutation(() => Boolean)
+	async forgorPassword(@Arg('email') email: string, @Ctx() { em, redis }: MyContext) {
+		const user = await em.findOne(User, { email });
+		if (!user) {
+			return true;
+		}
+		//send password reset link by email
+		const token = v4();
+
+		await redis.set(FORGOT_PASSWORD_PREFIX + token, user.id, 'ex', 1000 * 60 * 60 * 24 * 3);
+
+		await sendEmail(email, `<a href="http://localhost:3000/change-password/${token}">reset password</a>`);
+
+		return true;
+	}
+
 	@Query(() => User, { nullable: true })
 	async me(@Ctx() { req, em }: MyContext) {
 		if (!req.session.userId) {
@@ -44,26 +116,11 @@ export class UserResolver {
 		@Ctx() { em, req }: MyContext,
 		@Arg('options') options: UserNamePasswordInput
 	): Promise<UserResponse> {
-		if (options.username.length <= 2) {
-			return {
-				errors: [
-					{
-						field: 'username',
-						message: 'username length must be greater than 2'
-					}
-				]
-			};
-		}
+		//validate input
+		const errors = validateRegister(options);
 
-		if (options.password.length <= 2) {
-			return {
-				errors: [
-					{
-						field: 'password',
-						message: 'password length must be greater than 2'
-					}
-				]
-			};
+		if (errors) {
+			return { errors };
 		}
 
 		const user = await em.findOne(User, { username: options.username });
@@ -72,8 +129,8 @@ export class UserResolver {
 			return {
 				errors: [
 					{
-						field: 'username',
-						message: 'username already exits'
+						field: 'usernameOrEmail',
+						message: 'username or email already exits'
 					}
 				]
 			};
@@ -93,6 +150,7 @@ export class UserResolver {
 				.insert({
 					username: options.username,
 					password: hashed,
+					email: options.email,
 					created_at: new Date(),
 					updated_at: new Date()
 				})
@@ -121,23 +179,32 @@ export class UserResolver {
 	}
 
 	@Mutation(() => UserResponse)
-	async login(@Ctx() { em, req }: MyContext, @Arg('options') options: UserNamePasswordInput): Promise<UserResponse> {
-		if (options.username.length < 0) {
+	async login(
+		@Ctx() { em, req }: MyContext,
+		@Arg('usernameOrEmail') usernameOrEMail: string,
+		@Arg('password') password: string
+	): Promise<UserResponse> {
+		if (usernameOrEMail.length < 0) {
 			return {
 				errors: [
 					{
-						field: 'username',
+						field: 'usernameOrEmail',
 						message: 'username length must be greater than 2'
 					}
 				]
 			};
 		}
 
-		const user = await em.findOneOrFail(User, {
-			username: options.username.toLowerCase()
-		});
+		const user = await em.findOneOrFail(
+			User,
+			usernameOrEMail.includes('@')
+				? { email: usernameOrEMail }
+				: {
+						username: usernameOrEMail.toLowerCase()
+					}
+		);
 
-		const verified = await argon2.verify(user.password, options.password);
+		const verified = await argon2.verify(user.password, password);
 
 		if (!verified) {
 			return {
@@ -157,5 +224,19 @@ export class UserResolver {
 		console.log(req.session);
 
 		return { user };
+	}
+
+	@Mutation(() => Boolean)
+	logout(@Ctx() { req, res }: MyContext) {
+		return new Promise((resolve) =>
+			req.session.destroy((err) => {
+				if (err) {
+					console.log(err);
+					resolve(false);
+				}
+				res.clearCookie(COOKIE_NAME);
+				resolve(true);
+			})
+		);
 	}
 }

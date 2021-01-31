@@ -1,38 +1,26 @@
 import React from 'react';
 import { Form, Formik } from 'formik';
-import { Box, Button, FormControl, FormErrorMessage, FormLabel, Input } from '@chakra-ui/react';
+import { Box, Button } from '@chakra-ui/react';
 import { Wrapper } from '../components/Wrapper';
 import { InputField } from '../components/InputField';
-import { useLoginMutation, useRegisterMutation } from '../generated/graphql';
+import { useLoginMutation } from '../generated/graphql';
 import { toErrorMap } from '../utils/toErrorMap';
 import {useRouter}  from "next/router"
+import { withUrqlClient } from 'next-urql';
+import { createUrqlClient } from '../utils/createUrqlClient';
 
 interface LoginProps {}
 
-const REGISTER_MUT = `
-mutation Register($username: String!, $password: String!) {
-  register(options: { username: $username, password: $password }) {
-    errors {
-      field
-      message
-    }
-    user {
-      id
-      username
-    }
-  }
-}
-`;
 
 const Login: React.FC<LoginProps> = ({}) => {
   const router = useRouter();
 	const [, login ] = useLoginMutation();
 	return (
 		<Wrapper variant="small">
-			<Formik	initialValues={{ username: '', password: '' }}
+			<Formik	initialValues={{ usernameOrEmail: '', password: '' }}
 				onSubmit={async (values, { setErrors }) => {
 					console.log(values);
-          const response = await login({options:values});
+          const response = await login(values);
           if(response.data?.login.errors){
             const errorMap = toErrorMap(response.data?.login.errors);
             console.log(errorMap)
@@ -44,7 +32,7 @@ const Login: React.FC<LoginProps> = ({}) => {
 				}}>
 				{({ isSubmitting }) => (
 					<Form>
-						<InputField name="username" label="Username" placeholder="username" />
+						<InputField name="usernameOrEmail" label="Username Or Email" placeholder="usernameOrEmail" />
 						<Box mt={4}>
 							<InputField name="password" label="Password" placeholder="password" type="password" />
 						</Box>
@@ -58,4 +46,4 @@ const Login: React.FC<LoginProps> = ({}) => {
 	);
 };
 
-export default Login;
+export default withUrqlClient(createUrqlClient, { ssr: false })(Login);
